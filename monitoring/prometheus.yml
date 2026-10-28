@@ -1,0 +1,9 @@
+# Scrape Ray's Prometheus exporter (pinned to 8080 in src/router.py).
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: ray
+    static_configs:
+      - targets: ["ray-serve:8080"]

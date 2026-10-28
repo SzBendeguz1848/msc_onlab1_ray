@@ -1,0 +1,25 @@
+{
+  "id": "chatcmpl-c2659bc2-8776-5319-a7af-9ff8e867def2",
+  "model": "fake-model",
+  "object": "chat.completion",
+  "kv_transfer_params": null,
+  "created": 1791441201,
+  "usage": {
+    "prompt_tokens": 6,
+    "completion_tokens": 32,
+    "total_tokens": 38,
+    "prompt_tokens_detail": {
+      "cached_tokens": 0
+    }
+  },
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "length",
+      "message": {
+        "role": "assistant",
+        "content": "Alas, poor Yorick! I knew him, Horatio: A fellow of infinite jest Testing@, #testing 1$ ,2%,3^, [4"
+      }
+    }
+  ]
+}

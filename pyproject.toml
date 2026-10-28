@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "msc-onlab1-ray"
+version = "0.1.0"
+description = "Ray Serve request-router benchmark against llm-d-inference-sim"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+guidellm = [
+  "guidellm[recommended]",  # needs uvloop -> Linux only; runs in the `guidellm` container
+  "huggingface_hub",
+]
+notebook = [
+  "pandas",
+  "plotly",
+  "jupyter",                # evaluate.ipynb, runs on the host (Windows-safe)
+]
+serve = [
+  "ray[serve]==2.58.0",  # pin latest stable (PyPI); RoundRobin/ConsistentHash experimental APIs
+  "httpx",
+  "jinja2",  # undeclared transitive dep of ray.serve._private.haproxy in 2.58.0
+  "pyarrow",  # needed to import ray.serve.llm.request_router (PrefixCacheAffinityRouter probe)
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

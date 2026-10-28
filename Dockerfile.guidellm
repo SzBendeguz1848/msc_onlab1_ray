@@ -1,0 +1,9 @@
+FROM python:3.11-slim
+WORKDIR /app
+COPY pyproject.toml ./
+COPY scripts ./scripts
+RUN mkdir -p src \
+ && pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+ && pip install --no-cache-dir -e ".[guidellm]"
+ENV PYTHONUNBUFFERED=1
+ENTRYPOINT ["python", "scripts/run_benchmark.py"]

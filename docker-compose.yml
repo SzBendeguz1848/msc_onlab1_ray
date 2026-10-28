@@ -1,0 +1,193 @@
+# Sim latency: per-token prefill (minus cached_tokens) drives TTFT for
+# prefix_shared benches. Cold KV each run: .\scripts\run_router_bench.ps1
+x-sim: &sim
+  image: ghcr.io/llm-d/llm-d-inference-sim:v0.9.0
+  command:
+    - --port
+    - "8000"
+    - --model
+    - Qwen/Qwen2.5-1.5B-Instruct
+    - --max-model-len
+    - "4096"
+    - --latency-calculator
+    - per-token
+    - --prefill-overhead
+    - "10ms"
+    - --prefill-time-per-token
+    - "200us"
+    - --inter-token-latency
+    - "20ms"
+    - --max-num-seqs
+    - "4"            # concurrency cap → waiting queue can form
+    - --max-waiting-queue-length
+    - "1000"
+    - --enable-kvcache
+    - --render-url
+    - http://render:8082
+  depends_on:
+    render:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  render:
+    image: vllm/vllm-openai-cpu:v0.21.0
+    entrypoint: ["vllm"]
+    command:
+      - launch
+      - render
+      - Qwen/Qwen2.5-1.5B-Instruct
+      - --port=8082
+    ports:
+      - "18082:8082"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8082/health', timeout=5)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 36
+      start_period: 180s
+    restart: unless-stopped
+
+  ray-serve:
+    build: .
+    # Default: src/router.py (P2C / RR / CH). Cold-KV bench (recreates sims every run):
+    #   .\scripts\run_router_bench.ps1 -Router prefix
+    #   .\scripts\run_router_bench.ps1 -Router p2c
+    # Manual: set SERVE_SCRIPT/ROUTER, then force-recreate sim-* + ray-serve, then guidellm.
+    #   docker compose run --rm guidellm  alone does NOT clear sim KV caches.
+    ports:
+      - "8000:8000"
+      - "8265:8265"  # Ray Dashboard — http://localhost:8265
+      - "8080:8080"  # Prometheus metrics — http://localhost:8080
+    environment:
+      SERVE_SCRIPT: ${SERVE_SCRIPT:-src/router.py}
+      ROUTER: ${ROUTER:-p2c}           # p2c| round_robin | consistent_hash (router.py only)
+      NUM_REPLICAS: "8"
+      BACKEND_URLS: "http://sim-0:8000,http://sim-1:8000,http://sim-2:8000,http://sim-3:8000,http://sim-4:8000,http://sim-5:8000,http://sim-6:8000,http://sim-7:8000"
+      PREFIX_IMBALANCED_THRESHOLD: "5"
+      PREFIX_MATCH_RATE_THRESHOLD: "0.15"
+      # PrefixCache polls all Proxy queue lengths per request; 0.1s is tight
+      # under Docker/WSL + streaming sims (see Serve warning + GuideLLM 500s).
+      RAY_SERVE_QUEUE_LENGTH_RESPONSE_DEADLINE_S: "2.0"
+      RAY_DASHBOARD_HOST: "0.0.0.0"    # bind dashboard so host port 8265 reaches it
+      # Embed Grafana panels in the Ray Dashboard Metrics tab.
+      RAY_PROMETHEUS_HOST: "http://prometheus:9090"
+      RAY_PROMETHEUS_NAME: "Prometheus"
+      RAY_GRAFANA_HOST: "http://grafana:3000"
+      RAY_GRAFANA_IFRAME_HOST: "http://localhost:3000"
+      # Proxy tees chat.completion bodies here; run_benchmark assembles into
+      # results/<run-id>/assembled_chat_completions.json after GuideLLM.
+      CAPTURE_DIR: /app/results/_capture
+    command: ["sh", "-c", "python $$SERVE_SCRIPT"]
+    volumes:
+      - ./src:/app/src
+      - ./results:/app/results
+    depends_on:
+      - sim-0
+      - sim-1
+      - sim-2
+      - sim-3
+      - sim-4
+      - sim-5
+      - sim-6
+      - sim-7
+    healthcheck:
+      # container "Running" != Serve app ready (worker+controller+8 replicas+hash
+      # ring take a few seconds) -> guidellm's first request can 404 on a fresh
+      # `--force-recreate` without this.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+      start_period: 30s
+
+  sim-0:
+    <<: *sim
+    ports: ["8001:8000"]
+    environment: { POD_IP: sim-0, POD_NAME: sim-0 }
+  sim-1:
+    <<: *sim
+    ports: ["8002:8000"]
+    environment: { POD_IP: sim-1, POD_NAME: sim-1 }
+  sim-2:
+    <<: *sim
+    ports: ["8003:8000"]
+    environment: { POD_IP: sim-2, POD_NAME: sim-2 }
+  sim-3:
+    <<: *sim
+    ports: ["8004:8000"]
+    environment: { POD_IP: sim-3, POD_NAME: sim-3 }
+  sim-4:
+    <<: *sim
+    ports: ["8005:8000"]
+    environment: { POD_IP: sim-4, POD_NAME: sim-4 }
+  sim-5:
+    <<: *sim
+    ports: ["8006:8000"]
+    environment: { POD_IP: sim-5, POD_NAME: sim-5 }
+  sim-6:
+    <<: *sim
+    ports: ["8007:8000"]
+    environment: { POD_IP: sim-6, POD_NAME: sim-6 }
+  sim-7:
+    <<: *sim
+    ports: ["8008:8000"]
+    environment: { POD_IP: sim-7, POD_NAME: sim-7 }
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    ports:
+      - "9090:9090"  # http://localhost:9090
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=6h
+      - --web.enable-lifecycle
+    depends_on:
+      ray-serve:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    ports:
+      - "3000:3000"  # http://localhost:3000 (admin/admin)
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+  # guidellm doesn't install on native Windows (hard `uvloop` dependency), so the
+  # traffic generator runs as its own container instead of on the host.
+  # Not started by `docker compose up`; invoke explicitly, e.g.:
+  #   docker compose run --rm guidellm --run-id p2c
+  guidellm:
+    build:
+      context: .
+      dockerfile: Dockerfile.guidellm
+    profiles: ["benchmark"]
+    depends_on:
+      ray-serve:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ./results:/app/results
+    entrypoint: ["python", "scripts/run_benchmark.py", "--target", "http://ray-serve:8000"]
+
+volumes:
+  hf-cache:

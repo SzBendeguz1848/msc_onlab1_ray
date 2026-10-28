@@ -1,0 +1,1 @@
+gemini elkezdett válaszolgatni a beküldött sharegpt.json promptjaira, pedig az volt a kérés, hogy az alapján generáljon prefixhez prompt setet.
